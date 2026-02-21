@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+google_credentials.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and debug output
+erg_agent.log
+*.log
+debug_converted.jpg
+test_output.jpg
+
+# Google Drive sync artifacts
+.tmp.driveupload/
