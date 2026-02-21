@@ -1,5 +1,5 @@
 """
-Erg Photo Agent - Fixed Version
+Erg Photo Agent - v2
 Changes from last working version:
 1. Prompt explicitly clarifies summary row vs split rows
 2. HEIC support via pillow-heif
