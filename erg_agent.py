@@ -17,6 +17,9 @@ import io
 from pathlib import Path
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import anthropic
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -74,10 +77,10 @@ _processing = set()
 
 # ─── EXIF ──────────────────────────────────────────────────────────────────────
 
-def get_exif_date(image_path):
+def get_exif_datetime(image_path):
+    """Return full datetime object from EXIF, or None."""
     try:
         img = Image.open(image_path)
-        # HEIC files (via pillow-heif) use getexif(), not _getexif()
         try:
             exif_data = img.getexif()
         except Exception:
@@ -86,8 +89,7 @@ def get_exif_date(image_path):
             return None
         for tag_id, value in exif_data.items():
             if TAGS.get(tag_id) in ("DateTimeOriginal", "DateTime"):
-                dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
-                return dt.strftime("%Y-%m-%d")
+                return datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
     except Exception as e:
         log.warning(f"Could not read EXIF: {e}")
     return None
@@ -223,14 +225,70 @@ def get_sheets_service():
     )
     return build("sheets", "v4", credentials=creds).spreadsheets()
 
-def append_to_sheet(data, photo_filename):
+def get_matching_rows(sheets, last_name, first_name, date, workout_type):
+    """Find all rows matching name/date/workout_type. Returns list of (row_index, piece_number)."""
+    result = sheets.values().get(
+        spreadsheetId=GOOGLE_SHEET_ID,
+        range=f"{SHEET_TAB_NAME}!A:F",
+    ).execute()
+    rows = result.get("values", [])
+    matches = []
+    for i, row in enumerate(rows):
+        if len(row) < 5:
+            continue
+        r_last = row[0].strip() if row[0] else ""
+        r_first = row[1].strip() if row[1] else ""
+        r_date = row[2].strip().lstrip("'") if row[2] else ""
+        r_type = row[3].strip().lstrip("'") if row[3] else ""
+        if (r_last.lower() == last_name.lower()
+                and r_first.lower() == first_name.lower()
+                and r_date == date
+                and r_type == workout_type):
+            try:
+                piece_num = int(row[4]) if row[4] else 1
+            except ValueError:
+                piece_num = 1
+            matches.append((i, piece_num))
+    return matches
+
+
+def determine_piece_number(sheets, data, exif_dt):
+    """Determine piece # based on existing sheet rows and EXIF timestamp.
+
+    If no matching rows exist, piece = 1.
+    If matching rows exist, the new piece is assigned the next number.
+    """
+    last_name = data.get("last_name", "")
+    first_name = data.get("first_name", "")
+    date = data.get("date", "")
+    workout_type = data.get("workout_type", "")
+
+    matches = get_matching_rows(sheets, last_name, first_name, date, workout_type)
+    new_piece = len(matches) + 1
+    new_total = new_piece
+
+    # Update "of Total" (column F, index 5) on all existing matching rows
+    for row_idx, _ in matches:
+        cell = f"{SHEET_TAB_NAME}!F{row_idx + 1}"
+        sheets.values().update(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range=cell,
+            valueInputOption="USER_ENTERED",
+            body={"values": [[new_total]]},
+        ).execute()
+
+    log.info(f"  Piece #{new_piece} of {new_total} (found {len(matches)} existing piece(s))")
+    return new_piece, new_total
+
+
+def append_to_sheet(data, photo_filename, piece_number, pieces_total):
     sheets = get_sheets_service()
 
     splits = data.get("splits") or []
     split_cols = []
     for i in range(5):
         if i < len(splits):
-            split_cols.append(splits[i].get("split") or "")
+            split_cols.append("'" + (splits[i].get("split") or ""))
             split_cols.append(splits[i].get("spm") or "")
         else:
             split_cols.extend(["", ""])
@@ -238,13 +296,13 @@ def append_to_sheet(data, photo_filename):
     row = [
         data.get("last_name") or "",
         data.get("first_name") or "",
-        data.get("date") or "",
-        data.get("workout_type") or "",
-        data.get("piece_number") or 1,
-        data.get("pieces_total") or 1,
+        "'" + (data.get("date") or ""),
+        "'" + (data.get("workout_type") or ""),
+        piece_number,
+        pieces_total,
         data.get("total_distance_m") or "",
-        data.get("total_time") or "",
-        data.get("avg_split") or "",
+        "'" + (data.get("total_time") or ""),
+        "'" + (data.get("avg_split") or ""),
         data.get("avg_spm") or "",
         *split_cols,
         photo_filename,
@@ -259,16 +317,15 @@ def append_to_sheet(data, photo_filename):
         body={"values": [row]}
     ).execute()
 
-    log.info(f"  Sheet updated: {data.get('last_name')} | {data.get('date')} | avg {data.get('avg_split')} | {data.get('total_distance_m')}m")
+    log.info(f"  Sheet updated: {data.get('last_name')} | {data.get('date')} | piece {piece_number}/{pieces_total} | avg {data.get('avg_split')} | {data.get('total_distance_m')}m")
 
 # ─── FILE PROCESSING ───────────────────────────────────────────────────────────
 
-def build_destination(data, original_path):
+def build_destination(data, original_path, piece_number):
     date = data.get("date") or "unknown-date"
     name = f"{data.get('last_name', 'Unknown')}-{data.get('first_name', '')}".strip("-")
-    piece = data.get("piece_number") or 1
     ext = Path(original_path).suffix.lower()
-    filename = f"{date}_{name}_p{piece}{ext}"
+    filename = f"{date}_{name}_p{piece_number}{ext}"
     return Path(PROCESSED_FOLDER) / date / filename
 
 def process_image(image_path):
@@ -283,18 +340,23 @@ def process_image(image_path):
             log.warning(f"  File no longer exists, skipping.")
             return
 
-        exif_date = get_exif_date(image_path)
+        exif_dt = get_exif_datetime(image_path)
+        exif_date = exif_dt.strftime("%Y-%m-%d") if exif_dt else None
         log.info(f"  EXIF date: {exif_date or 'not found'}")
 
         data = extract_erg_data(image_path, exif_date)
 
-        dest = build_destination(data, image_path)
+        # Determine piece # from existing sheet rows
+        sheets = get_sheets_service()
+        piece_number, pieces_total = determine_piece_number(sheets, data, exif_dt)
+
+        dest = build_destination(data, image_path, piece_number)
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         if dest.exists():
             dest = dest.parent / f"{dest.stem}_{int(time.time())}{dest.suffix}"
 
-        append_to_sheet(data, dest.name)
+        append_to_sheet(data, dest.name, piece_number, pieces_total)
         Path(image_path).rename(dest)
         log.info(f"  Done: {dest.name}")
 
@@ -339,13 +401,20 @@ class ErgPhotoHandler(FileSystemEventHandler):
 
 def process_existing_images():
     watch = Path(WATCH_FOLDER)
-    images = sorted([
+    images = [
         f for f in watch.iterdir()
         if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
-    ])
+    ]
     if images:
-        log.info(f"Found {len(images)} photo(s) to process.")
+        # Sort by EXIF timestamp so earlier photos get lower piece numbers
+        images_with_ts = []
         for img in images:
+            dt = get_exif_datetime(str(img))
+            images_with_ts.append((dt or datetime.max, img))
+        images_with_ts.sort(key=lambda x: x[0])
+
+        log.info(f"Found {len(images_with_ts)} photo(s) to process (sorted by timestamp).")
+        for _, img in images_with_ts:
             process_image(str(img))
     else:
         log.info("No photos found — watching for new ones.")
