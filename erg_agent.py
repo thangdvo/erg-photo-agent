@@ -229,7 +229,7 @@ def get_matching_rows(sheets, last_name, first_name, date, workout_type):
     """Find all rows matching name/date/workout_type. Returns list of (row_index, piece_number)."""
     result = sheets.values().get(
         spreadsheetId=GOOGLE_SHEET_ID,
-        range=f"{SHEET_TAB_NAME}!A:F",
+        range=f"{SHEET_TAB_NAME}!A1:F1000",
     ).execute()
     rows = result.get("values", [])
     matches = []
