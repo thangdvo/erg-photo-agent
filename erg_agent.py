@@ -44,7 +44,7 @@ FAILED_FOLDER    = r"G:\My Drive\Sps rowing\Erg pics\Failed"
 
 CREDENTIALS_FILE = "google_credentials.json"
 GOOGLE_SHEET_ID  = "1yslroKc4PEj2drmX48gyi64-4HLLSFE4iRHf4fdVy9s"
-SHEET_TAB_NAME   = "ErgLog"
+SHEET_TAB_NAME   = "ErgLog_master"
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 MAX_IMAGE_BYTES  = 4 * 1024 * 1024  # 4MB — safely under Claude's 5MB limit
