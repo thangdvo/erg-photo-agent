@@ -58,6 +58,9 @@ SHEET_COLUMNS = [
     "Split 3", "SPM 3",
     "Split 4", "SPM 4",
     "Split 5", "SPM 5",
+    "Split 6", "SPM 6",
+    "Split 7", "SPM 7",
+    "Split 8", "SPM 8",
     "Photo File", "Notes",
 ]
 
@@ -150,11 +153,11 @@ THE SCREEN LAYOUT IS:
   time    meter   /500m   s/m
   ─────────────────────────────
   5:00.0  XXXX   X:XX.X  XX    ← SUMMARY ROW (total for whole piece)
-  1:00.0   XXX   X:XX.X  XX    ← split 1 (first minute)
-  2:00.0   XXX   X:XX.X  XX    ← split 2 (second minute)
-  3:00.0   XXX   X:XX.X  XX    ← split 3 (third minute)
-  4:00.0   XXX   X:XX.X  XX    ← split 4 (fourth minute)
-  5:00.0   XXX   X:XX.X  XX    ← split 5 (fifth minute)
+  1:00.0   XXX   X:XX.X  XX    ← split 1 (first interval)
+  2:00.0   XXX   X:XX.X  XX    ← split 2 (second interval)
+  3:00.0   XXX   X:XX.X  XX    ← split 3
+  ...                           ← up to 8 splits possible
+  8:00.0   XXX   X:XX.X  XX    ← split 8 (if present)
 
 CRITICAL RULES:
 - The SUMMARY ROW is the FIRST data row (time matches total workout duration e.g. 5:00.0)
@@ -163,7 +166,7 @@ CRITICAL RULES:
 - total_time = time from SUMMARY ROW (e.g. "5:00.0")
 - avg_split = /500m from SUMMARY ROW only
 - avg_spm = s/m from SUMMARY ROW only
-- splits array = the SPLIT ROWS only (1:00, 2:00, 3:00, 4:00, 5:00)
+- splits array = the SPLIT ROWS only (up to 8 intervals — include ALL split rows visible on screen)
 
 Example for L. Groll photo (1144m total, avg split 2:11.1):
 {{
@@ -191,7 +194,7 @@ Now read the actual photo and return the correct JSON. Return ONLY valid JSON, n
 
     response = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=1500,
+        max_tokens=2000,
         messages=[{
             "role": "user",
             "content": [
@@ -286,7 +289,7 @@ def append_to_sheet(data, photo_filename, piece_number, pieces_total):
 
     splits = data.get("splits") or []
     split_cols = []
-    for i in range(5):
+    for i in range(8):
         if i < len(splits):
             split_cols.append("'" + (splits[i].get("split") or ""))
             split_cols.append(splits[i].get("spm") or "")
@@ -311,7 +314,7 @@ def append_to_sheet(data, photo_filename, piece_number, pieces_total):
 
     sheets.values().append(
         spreadsheetId=GOOGLE_SHEET_ID,
-        range=f"{SHEET_TAB_NAME}!A:W",
+        range=f"{SHEET_TAB_NAME}!A:AC",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": [row]}
