@@ -12,6 +12,7 @@ import os
 import json
 import time
 import base64
+import hashlib
 import logging
 import io
 from pathlib import Path
@@ -39,8 +40,9 @@ except ImportError:
 # ─── CONFIGURATION ─────────────────────────────────────────────────────────────
 
 WATCH_FOLDER     = r"G:\My Drive\Sps rowing\Erg pics"
-PROCESSED_FOLDER = r"G:\My Drive\Sps rowing\Erg pics\Processed"
-FAILED_FOLDER    = r"G:\My Drive\Sps rowing\Erg pics\Failed"
+PROCESSED_FOLDER   = r"G:\My Drive\Sps rowing\Erg pics\Processed"
+FAILED_FOLDER      = r"G:\My Drive\Sps rowing\Erg pics\Failed"
+DUPLICATES_FOLDER  = r"G:\My Drive\Sps rowing\Erg pics\Duplicates"
 
 CREDENTIALS_FILE = "google_credentials.json"
 GOOGLE_SHEET_ID  = "1yslroKc4PEj2drmX48gyi64-4HLLSFE4iRHf4fdVy9s"
@@ -322,6 +324,29 @@ def append_to_sheet(data, photo_filename, piece_number, pieces_total):
 
     log.info(f"  Sheet updated: {data.get('last_name')} | {data.get('date')} | piece {piece_number}/{pieces_total} | avg {data.get('avg_split')} | {data.get('total_distance_m')}m")
 
+# ─── DUPLICATE DETECTION ──────────────────────────────────────────────────────
+
+def get_file_hash(image_path):
+    """Return MD5 hash of file contents."""
+    hasher = hashlib.md5()
+    with open(image_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+def move_to_duplicates(image_path):
+    try:
+        dup_dir = Path(DUPLICATES_FOLDER)
+        dup_dir.mkdir(parents=True, exist_ok=True)
+        p = Path(image_path)
+        dest = dup_dir / p.name
+        if dest.exists():
+            dest = dup_dir / f"{p.stem}_{int(time.time())}{p.suffix}"
+        p.rename(dest)
+        log.info(f"  Duplicate detected -> Duplicates/{dest.name}")
+    except Exception as e:
+        log.error(f"  Could not move to Duplicates: {e}")
+
 # ─── FILE PROCESSING ───────────────────────────────────────────────────────────
 
 def build_destination(data, original_path, piece_number):
@@ -404,23 +429,24 @@ class ErgPhotoHandler(FileSystemEventHandler):
 
 def process_existing_images():
     watch = Path(WATCH_FOLDER)
-    images = [
+    images = sorted([
         f for f in watch.iterdir()
         if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
-    ]
-    if images:
-        # Sort by EXIF timestamp so earlier photos get lower piece numbers
-        images_with_ts = []
-        for img in images:
-            dt = get_exif_datetime(str(img))
-            images_with_ts.append((dt or datetime.max, img))
-        images_with_ts.sort(key=lambda x: x[0])
-
-        log.info(f"Found {len(images_with_ts)} photo(s) to process (sorted by timestamp).")
-        for _, img in images_with_ts:
-            process_image(str(img))
-    else:
+    ])
+    if not images:
         log.info("No photos found — watching for new ones.")
+        return
+
+    log.info(f"Found {len(images)} photo(s) to process.")
+    seen_hashes = {}
+    for img in images:
+        file_hash = get_file_hash(str(img))
+        if file_hash in seen_hashes:
+            log.info(f"  {img.name} is identical to {seen_hashes[file_hash]} — skipping.")
+            move_to_duplicates(str(img))
+        else:
+            seen_hashes[file_hash] = img.name
+            process_image(str(img))
 
 def main():
     log.info("=" * 50)
